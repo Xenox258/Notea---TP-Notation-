@@ -13,4 +13,5 @@
 /.agents
 /.vscode
 /gradle
+/keystore.jks
 app/build/
