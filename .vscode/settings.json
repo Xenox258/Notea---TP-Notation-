@@ -1,6 +1,0 @@
-{
-  "emulator.emulatorPath": "/home/teob/Android/Sdk/emulator",
-  "emulator.emulatorPathLinux": "/home/teob/Android/Sdk/emulator",
-  "java.jdt.ls.java.home": "/usr/lib/jvm/java-21-openjdk",
-  "java.configuration.updateBuildConfiguration": "interactive"
-}
