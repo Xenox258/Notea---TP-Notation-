@@ -77,15 +77,23 @@ class MainActivity : Activity() {
         var nameInput: EditText? = null
         setContentView(
             verticalRoot {
-                addView(headerRow(if (project.name.isBlank()) "Nouveau TP" else "Reglages TP") {
+                addView(headerRow(
+                    title = if (project.name.isBlank()) "Nouveau TP" else "Reglages TP",
+                    leading = {
                     addView(homeButton {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
                         saveCurrentProject()
                         showHome()
                     })
-                })
-                addView(spacer(12))
-                addView(themeToggleButton())
+                    },
+                    trailing = {
+                        addView(themeToggleButton {
+                            project.name = nameInput?.text?.toString()?.trim().orEmpty()
+                            saveCurrentProject()
+                            showTpSetup()
+                        })
+                    },
+                ))
                 addView(spacer(18))
                 addView(label("Nom du TP"))
                 nameInput = EditText(this@MainActivity).apply {
@@ -186,25 +194,14 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(14), dp(12), dp(14))
 
             addView(TextView(this@MainActivity).apply {
-                text = "App Notation"
+                text = "Notéa"
                 textSize = 18f
                 setTextColor(ui.headerText)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER_VERTICAL
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-            addView(Button(this@MainActivity).apply {
-                text = if (isDarkMode) "Clair" else "Sombre"
-                textSize = 13f
-                setAllCaps(false)
-                setTextColor(ui.headerText)
-                background = headerChipSurface()
-                setOnClickListener {
-                    isDarkMode = !isDarkMode
-                    ThemePrefs.saveDarkMode(this@MainActivity, isDarkMode)
-                    showHome()
-                }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)))
+            addView(themeToggleButton { showHome() })
         }.also {
             it.layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -270,19 +267,18 @@ class MainActivity : Activity() {
         val inputs = mutableMapOf<String, EditText>()
         setContentView(
             verticalRoot {
-                addView(row {
-                    addView(smallButton("Retour") {
+                addView(headerRow(
+                    title = "Ponderations",
+                    leading = {
+                    addView(backButton {
                         saveWeights(inputs)
                         showTpSetup()
                     })
-                    addView(TextView(this@MainActivity).apply {
-                        text = "Ponderations"
-                        textSize = 22f
-                        setTextColor(ui.text)
-                        setTypeface(null, android.graphics.Typeface.BOLD)
-                        gravity = Gravity.CENTER_VERTICAL
-                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                })
+                    },
+                    trailing = {
+                        addView(themeToggleButton { showWeightSettings() })
+                    },
+                ))
 
                 addView(TextView(this@MainActivity).apply {
                     text = "Ces valeurs sont utilisees pour calculer les notes et la moyenne du TP."
@@ -353,20 +349,19 @@ class MainActivity : Activity() {
         selectedStudentId = null
         setContentView(
             verticalRoot {
-                addView(row {
+                addView(headerRow(
+                    title = project.name,
+                    leading = {
                     addView(homeButton {
                         saveCurrentProject()
                         showHome()
                     })
-                    addView(TextView(this@MainActivity).apply {
-                        text = project.name
-                        textSize = 22f
-                        setTextColor(ui.text)
-                        gravity = Gravity.CENTER_VERTICAL
-                        setTypeface(null, android.graphics.Typeface.BOLD)
-                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    },
+                    trailing = {
+                        addView(themeToggleButton { showStudentList() })
                     addView(gearButton { showTpSetup() })
-                })
+                    },
+                ))
 
                 addView(TextView(this@MainActivity).apply {
                     text = "Moyenne classe: ${averageLabel()}   |   ${gradedCount()} / ${project.students.size} notes"
@@ -415,28 +410,28 @@ class MainActivity : Activity() {
         val grades = project.grades.getOrPut(student.id) { mutableMapOf() }
         setContentView(
             verticalRoot {
-                addView(row {
-                    addView(smallButton("Retour") {
+                addView(headerRow(
+                    title = student.name,
+                    leading = {
+                    addView(backButton {
                         saveCurrentProject()
                         showStudentList()
                     })
-                    addView(TextView(this@MainActivity).apply {
-                        text = student.name
-                        textSize = 21f
-                        setTextColor(ui.text)
-                        setTypeface(null, android.graphics.Typeface.BOLD)
-                        gravity = Gravity.CENTER_VERTICAL
-                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                })
+                    },
+                    trailing = {
+                        addView(themeToggleButton { showStudentGrade(student) })
+                    },
+                ))
 
                 val scoreText = TextView(this@MainActivity).apply {
                     text = "Note: ${scoreLabel(student.id)}"
                     textSize = 18f
-                    setTextColor(ui.primary)
+                    setTextColor(scoreColor(student.id))
                     setTypeface(null, android.graphics.Typeface.BOLD)
-                    setPadding(0, dp(8), 0, dp(12))
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(10), 0, dp(14))
                 }
-                addView(scoreText)
+                addView(scoreText, matchWrap())
 
                 groupedCriteria().forEach { (skill, criteria) ->
                     addView(skillHeader(skill))
@@ -469,6 +464,7 @@ class MainActivity : Activity() {
                         grades[criterion.id] = value
                         saveCurrentProject()
                         scoreText.text = "Note: ${scoreLabel(selectedStudentId)}"
+                        scoreText.setTextColor(scoreColor(selectedStudentId))
                         showStudentGrade(project.students.first { it.id == selectedStudentId })
                     })
                 }
@@ -519,6 +515,15 @@ class MainActivity : Activity() {
     private fun scoreLabel(studentId: String?): String {
         val score = studentId?.let { computeScore(project.grades[it] ?: emptyMap()) }
         return score?.let { "${gradeFormat.format(it)} / 20" } ?: "A noter"
+    }
+
+    private fun scoreColor(studentId: String?): Int {
+        val score = studentId?.let { computeScore(project.grades[it] ?: emptyMap()) } ?: return ui.muted
+        return when {
+            score < 8.0 -> SCORE_RED
+            score < 13.0 -> SCORE_ORANGE
+            else -> SCORE_GREEN
+        }
     }
 
     private fun averageLabel(): String {
@@ -583,6 +588,41 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun headerRow(
+        title: String,
+        leading: LinearLayout.() -> Unit = {},
+        trailing: LinearLayout.() -> Unit = {},
+    ): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val leadingGroup = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                leading()
+            }
+            addView(leadingGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 22f
+                setTextColor(ui.text)
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
+                maxLines = 1
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val trailingGroup = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                trailing()
+            }
+            addView(trailingGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            post {
+                leadingGroup.layoutParams = leadingGroup.layoutParams.apply { width = leadingGroup.width }
+                trailingGroup.layoutParams = trailingGroup.layoutParams.apply { width = trailingGroup.width }
+            }
+        }
+    }
+
     private fun title(text: String) = TextView(this).apply {
         this.text = text
         textSize = 26f
@@ -635,18 +675,20 @@ class MainActivity : Activity() {
         ).apply { setMargins(0, 0, dp(10), 0) }
     }
 
-    private fun themeToggleButton(): View {
-        return Button(this).apply {
-            text = if (isDarkMode) "Mode clair" else "Mode sombre"
-            textSize = 15f
-            setAllCaps(false)
-            setTextColor(ui.text)
+    private fun themeToggleButton(onThemeChanged: () -> Unit): View {
+        return ImageButton(this).apply {
             background = glassSurface()
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setImageResource(if (isDarkMode) R.drawable.ic_sun else R.drawable.ic_moon)
+            setColorFilter(ui.muted)
+            contentDescription = if (isDarkMode) "Mode clair" else "Mode sombre"
             setOnClickListener {
                 isDarkMode = !isDarkMode
                 ThemePrefs.saveDarkMode(this@MainActivity, isDarkMode)
-                showHome()
+                onThemeChanged()
+            }
+        }.also {
+            it.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+                setMargins(dp(8), 0, 0, 0)
             }
         }
     }
@@ -660,6 +702,18 @@ class MainActivity : Activity() {
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
             setMargins(dp(10), 0, 0, 0)
+        }
+    }
+
+    private fun backButton(onClick: () -> Unit) = ImageButton(this).apply {
+        background = accentSurface()
+        setImageResource(R.drawable.ic_back)
+        setColorFilter(ui.iconOnAccent)
+        contentDescription = "Retour"
+        setOnClickListener { onClick() }
+    }.also {
+        it.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+            setMargins(0, 0, dp(10), 0)
         }
     }
 
@@ -722,10 +776,11 @@ class MainActivity : Activity() {
 
     private fun accentSurface(): GradientDrawable {
         return GradientDrawable(
-            GradientDrawable.Orientation.LEFT_RIGHT,
+            GradientDrawable.Orientation.TL_BR,
             intArrayOf(ui.primary, ui.accent),
         ).apply {
             cornerRadius = dp(8).toFloat()
+            setStroke(dp(1), ui.glassStroke)
         }
     }
 
@@ -733,6 +788,7 @@ class MainActivity : Activity() {
         return GradientDrawable().apply {
             setColor(ui.header)
             cornerRadius = dp(10).toFloat()
+            setStroke(dp(1), ui.glassStroke)
         }
     }
 
@@ -755,6 +811,9 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_STUDENTS = 10
         private const val REQUEST_GRID = 11
+        private val SCORE_RED = Color.rgb(218, 74, 74)
+        private val SCORE_ORANGE = Color.rgb(222, 143, 48)
+        private val SCORE_GREEN = Color.rgb(71, 178, 122)
     }
 }
 
@@ -765,6 +824,10 @@ data class TpProject(
     var criteria: List<Criterion> = emptyList(),
     var grades: MutableMap<String, MutableMap<String, Int>> = mutableMapOf(),
 )
+
+private fun TpProject.hasContent(): Boolean {
+    return name.isNotBlank() || students.isNotEmpty() || criteria.isNotEmpty() || grades.isNotEmpty()
+}
 
 enum class StudentFilter {
     ALL,

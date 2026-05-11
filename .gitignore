@@ -3,8 +3,14 @@
 .idea/
 /build/
 /local.properties
+/keystore.properties
 /captures/
 /.externalNativeBuild/
 /.cxx/
-
+/base
+/.kotlin
+/.codex
+/.agents
+/.vscode
+/gradle
 app/build/

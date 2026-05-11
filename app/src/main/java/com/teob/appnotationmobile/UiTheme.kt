@@ -21,19 +21,19 @@ data class UiPalette(
 
 object UiTheme {
     val light = UiPalette(
-        backgroundTop = Color.rgb(246, 250, 251),
-        backgroundMid = Color.rgb(242, 248, 249),
-        backgroundBottom = Color.rgb(237, 245, 247),
-        glassTop = Color.rgb(255, 255, 255),
-        glassBottom = Color.rgb(250, 253, 253),
-        glassStroke = Color.rgb(224, 235, 237),
-        header = Color.rgb(22, 51, 58),
-        headerText = Color.rgb(248, 250, 252),
-        primary = Color.rgb(63, 175, 157),
-        accent = Color.rgb(91, 135, 168),
+        backgroundTop = Color.rgb(249, 252, 251),
+        backgroundMid = Color.rgb(243, 249, 247),
+        backgroundBottom = Color.rgb(236, 245, 243),
+        glassTop = Color.argb(232, 255, 255, 255),
+        glassBottom = Color.argb(205, 235, 247, 242),
+        glassStroke = Color.argb(170, 194, 224, 214),
+        header = Color.rgb(255, 255, 255),
+        headerText = Color.rgb(24, 34, 38),
+        primary = Color.rgb(116, 185, 165),
+        accent = Color.rgb(158, 208, 193),
         text = Color.rgb(24, 34, 38),
         muted = Color.rgb(99, 115, 122),
-        iconOnAccent = Color.WHITE,
+        iconOnAccent = Color.rgb(19, 53, 47),
     )
 
     val dark = UiPalette(
