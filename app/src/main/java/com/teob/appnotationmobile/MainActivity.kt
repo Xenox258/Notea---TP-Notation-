@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.util.TypedValue
@@ -14,6 +15,7 @@ import android.util.Xml
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
@@ -595,12 +597,43 @@ class MainActivity : Activity() {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(ui.backgroundTop, ui.backgroundMid, ui.backgroundBottom),
             )
-            addView(LinearLayout(this@MainActivity).apply {
+            clipToPadding = false
+
+            val baseHorizontalPadding = dp(18)
+            val baseTopPadding = dp(18)
+            val baseBottomPadding = dp(24)
+            val contentView = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(18), dp(18), dp(18), dp(24))
+                setPadding(baseHorizontalPadding, baseTopPadding, baseHorizontalPadding, baseBottomPadding)
                 content()
-            })
+            }
+
+            setOnApplyWindowInsetsListener { _, insets ->
+                val (systemTopInset, systemBottomInset) = systemBarVerticalInsets(insets)
+                contentView.setPadding(
+                    baseHorizontalPadding,
+                    baseTopPadding + systemTopInset,
+                    baseHorizontalPadding,
+                    baseBottomPadding + systemBottomInset,
+                )
+                insets
+            }
+
+            addView(contentView)
         }
+    }
+
+    private fun systemBarVerticalInsets(insets: WindowInsets): Pair<Int, Int> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            return bars.top to bars.bottom
+        }
+        return legacySystemBarVerticalInsets(insets)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun legacySystemBarVerticalInsets(insets: WindowInsets): Pair<Int, Int> {
+        return insets.systemWindowInsetTop to insets.systemWindowInsetBottom
     }
 
     private fun row(content: LinearLayout.() -> Unit): LinearLayout {
