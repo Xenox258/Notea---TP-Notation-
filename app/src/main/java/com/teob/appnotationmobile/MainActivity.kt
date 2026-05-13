@@ -101,6 +101,7 @@ class MainActivity : Activity() {
                     hint = "Ex: TP Acquisition capteur"
                     setText(project.name)
                     inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                    styleInput()
                 }
                 addView(nameInput, matchWrap())
 
@@ -191,11 +192,11 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = headerSurface()
-            setPadding(dp(16), dp(14), dp(12), dp(14))
+            setPadding(dp(18), dp(16), dp(12), dp(16))
 
             addView(TextView(this@MainActivity).apply {
                 text = "Notéa"
-                textSize = 18f
+                textSize = 24f
                 setTextColor(ui.headerText)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER_VERTICAL
@@ -220,8 +221,8 @@ class MainActivity : Activity() {
                 addView(ImageView(this@MainActivity).apply {
                     setImageBitmap(bitmap)
                     adjustViewBounds = true
-                    alpha = if (isDarkMode) 0.86f else 0.74f
-                }, LinearLayout.LayoutParams(dp(148), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    alpha = if (isDarkMode) 0.88f else 0.78f
+                }, LinearLayout.LayoutParams(dp(132), ViewGroup.LayoutParams.WRAP_CONTENT))
             }
         }
     }
@@ -234,8 +235,9 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             setAllCaps(false)
             setTextColor(ui.text)
-            background = glassSurface()
-            setPadding(dp(18), dp(18), dp(18), dp(18))
+            background = cardSurface()
+            stateListAnimator = null
+            setPadding(dp(18), dp(16), dp(18), dp(16))
             setOnClickListener {
                 project = existingProject
                 if (project.students.isEmpty() || project.criteria.isEmpty()) showTpSetup() else showStudentList()
@@ -255,6 +257,7 @@ class MainActivity : Activity() {
             setAllCaps(false)
             setTextColor(ui.iconOnAccent)
             background = accentSurface()
+            stateListAnimator = null
             setPadding(dp(14), dp(16), dp(14), dp(16))
             setOnClickListener {
                 project = TpProject()
@@ -284,7 +287,7 @@ class MainActivity : Activity() {
                     text = "Ces valeurs sont utilisees pour calculer les notes et la moyenne du TP."
                     textSize = 15f
                     setTextColor(ui.muted)
-                    setPadding(0, dp(8), 0, dp(14))
+                    setPadding(dp(2), dp(10), dp(2), dp(16))
                 })
 
                 groupedCriteria().forEach { (skill, criteria) ->
@@ -306,7 +309,8 @@ class MainActivity : Activity() {
     private fun weightEditor(criterion: Criterion, inputs: MutableMap<String, EditText>): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(10))
+            background = cardSurface()
+            setPadding(dp(16), dp(14), dp(16), dp(16))
             addView(TextView(this@MainActivity).apply {
                 text = criterion.skill
                 textSize = 13f
@@ -324,9 +328,15 @@ class MainActivity : Activity() {
                 hint = "Poids"
                 setText(weightLabel(criterion.weight))
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                styleInput()
             }
             inputs[criterion.id] = input
             addView(input, matchWrap())
+        }.also {
+            it.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { setMargins(0, 0, 0, dp(10)) }
         }
     }
 
@@ -367,7 +377,10 @@ class MainActivity : Activity() {
                     text = "Moyenne classe: ${averageLabel()}   |   ${gradedCount()} / ${project.students.size} notes"
                     textSize = 16f
                     setTextColor(ui.muted)
-                    setPadding(0, dp(8), 0, dp(12))
+                    background = quietSurface()
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                }, matchWrap().apply {
+                    setMargins(0, dp(10), 0, dp(12))
                 })
 
                 if (project.students.size >= 5) {
@@ -425,13 +438,16 @@ class MainActivity : Activity() {
 
                 val scoreText = TextView(this@MainActivity).apply {
                     text = "Note: ${scoreLabel(student.id)}"
-                    textSize = 18f
+                    textSize = 22f
                     setTextColor(scoreColor(student.id))
                     setTypeface(null, android.graphics.Typeface.BOLD)
                     gravity = Gravity.CENTER
-                    setPadding(0, dp(10), 0, dp(14))
+                    background = cardSurface()
+                    setPadding(dp(14), dp(16), dp(14), dp(16))
                 }
-                addView(scoreText, matchWrap())
+                addView(scoreText, matchWrap().apply {
+                    setMargins(0, dp(12), 0, dp(12))
+                })
 
                 groupedCriteria().forEach { (skill, criteria) ->
                     addView(skillHeader(skill))
@@ -450,7 +466,8 @@ class MainActivity : Activity() {
     ): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(10))
+            background = cardSurface()
+            setPadding(dp(16), dp(14), dp(16), dp(16))
             addView(TextView(this@MainActivity).apply {
                 text = "${criterion.label}\nPondération: ${weightLabel(criterion.weight)}"
                 textSize = 16f
@@ -469,6 +486,11 @@ class MainActivity : Activity() {
                     })
                 }
             })
+        }.also {
+            it.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { setMargins(0, 0, 0, dp(10)) }
         }
     }
 
@@ -479,8 +501,9 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             setAllCaps(false)
             setTextColor(ui.text)
-            background = glassSurface()
-            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = cardSurface()
+            stateListAnimator = null
+            setPadding(dp(16), dp(14), dp(16), dp(14))
             setOnClickListener { showStudentGrade(student) }
         }.also {
             it.layoutParams = LinearLayout.LayoutParams(
@@ -520,9 +543,9 @@ class MainActivity : Activity() {
     private fun scoreColor(studentId: String?): Int {
         val score = studentId?.let { computeScore(project.grades[it] ?: emptyMap()) } ?: return ui.muted
         return when {
-            score < 8.0 -> SCORE_RED
-            score < 13.0 -> SCORE_ORANGE
-            else -> SCORE_GREEN
+            score < 8.0 -> ui.danger
+            score < 13.0 -> ui.warning
+            else -> ui.success
         }
     }
 
@@ -569,12 +592,12 @@ class MainActivity : Activity() {
     private fun verticalRoot(content: LinearLayout.() -> Unit): ScrollView {
         return ScrollView(this).apply {
             background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
+                GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(ui.backgroundTop, ui.backgroundMid, ui.backgroundBottom),
             )
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(18), dp(18), dp(18), dp(18))
+                setPadding(dp(18), dp(18), dp(18), dp(24))
                 content()
             })
         }
@@ -604,7 +627,7 @@ class MainActivity : Activity() {
             addView(leadingGroup, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(TextView(this@MainActivity).apply {
                 text = title
-                textSize = 22f
+                textSize = 20f
                 setTextColor(ui.text)
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 gravity = Gravity.CENTER
@@ -625,23 +648,25 @@ class MainActivity : Activity() {
 
     private fun title(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 26f
+        textSize = 28f
         setTextColor(ui.text)
         setTypeface(null, android.graphics.Typeface.BOLD)
-        setPadding(0, 0, 0, dp(18))
+        setPadding(0, 0, 0, dp(16))
     }
 
     private fun label(text: String) = TextView(this).apply {
         this.text = text
         textSize = 14f
         setTextColor(ui.muted)
+        setTypeface(null, android.graphics.Typeface.BOLD)
+        setPadding(0, 0, 0, dp(6))
     }
 
     private fun infoLine(label: String, value: String) = TextView(this).apply {
         text = "$label: $value"
         textSize = 15f
         setTextColor(ui.muted)
-        setPadding(0, dp(16), 0, dp(6))
+        setPadding(dp(2), dp(16), dp(2), dp(6))
     }
 
     private fun skillHeader(text: String) = TextView(this).apply {
@@ -649,7 +674,7 @@ class MainActivity : Activity() {
         textSize = 19f
         setTextColor(ui.primary)
         setTypeface(null, android.graphics.Typeface.BOLD)
-        setPadding(0, dp(18), 0, dp(4))
+        setPadding(dp(2), dp(18), dp(2), dp(8))
     }
 
     private fun actionButton(text: String, onClick: () -> Unit) = Button(this).apply {
@@ -658,6 +683,9 @@ class MainActivity : Activity() {
         setAllCaps(false)
         setTextColor(ui.iconOnAccent)
         background = accentSurface()
+        stateListAnimator = null
+        minHeight = dp(50)
+        setPadding(dp(14), dp(12), dp(14), dp(12))
         setOnClickListener { onClick() }
     }
 
@@ -667,6 +695,7 @@ class MainActivity : Activity() {
         setAllCaps(false)
         setTextColor(ui.iconOnAccent)
         background = accentSurface()
+        stateListAnimator = null
         setOnClickListener { onClick() }
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(
@@ -677,7 +706,7 @@ class MainActivity : Activity() {
 
     private fun themeToggleButton(onThemeChanged: () -> Unit): View {
         return ImageButton(this).apply {
-            background = glassSurface()
+            background = quietSurface()
             setImageResource(if (isDarkMode) R.drawable.ic_sun else R.drawable.ic_moon)
             setColorFilter(ui.muted)
             contentDescription = if (isDarkMode) "Mode clair" else "Mode sombre"
@@ -694,9 +723,9 @@ class MainActivity : Activity() {
     }
 
     private fun gearButton(onClick: () -> Unit) = ImageButton(this).apply {
-        background = accentSurface()
+        background = quietSurface()
         setImageResource(R.drawable.ic_settings)
-        setColorFilter(ui.iconOnAccent)
+        setColorFilter(ui.primary)
         contentDescription = "Reglages"
         setOnClickListener { onClick() }
     }.also {
@@ -706,9 +735,9 @@ class MainActivity : Activity() {
     }
 
     private fun backButton(onClick: () -> Unit) = ImageButton(this).apply {
-        background = accentSurface()
+        background = quietSurface()
         setImageResource(R.drawable.ic_back)
-        setColorFilter(ui.iconOnAccent)
+        setColorFilter(ui.primary)
         contentDescription = "Retour"
         setOnClickListener { onClick() }
     }.also {
@@ -718,9 +747,9 @@ class MainActivity : Activity() {
     }
 
     private fun homeButton(onClick: () -> Unit) = ImageButton(this).apply {
-        background = glassSurface()
+        background = quietSurface()
         setImageResource(R.drawable.ic_home)
-        setColorFilter(ui.text)
+        setColorFilter(ui.primary)
         contentDescription = "Accueil"
         setOnClickListener { onClick() }
     }.also {
@@ -735,6 +764,7 @@ class MainActivity : Activity() {
         setAllCaps(false)
         setTextColor(if (selected) ui.iconOnAccent else ui.text)
         background = if (selected) accentSurface() else glassSurface()
+        stateListAnimator = null
         setOnClickListener { onClick() }
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(0, dp(44), 1f).apply {
@@ -748,6 +778,7 @@ class MainActivity : Activity() {
         setAllCaps(false)
         setTextColor(if (selected) ui.iconOnAccent else ui.text)
         background = if (selected) accentSurface() else glassSurface()
+        stateListAnimator = null
         setOnClickListener { onClick() }
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(0, dp(42), 1f).apply {
@@ -764,30 +795,49 @@ class MainActivity : Activity() {
         ViewGroup.LayoutParams.WRAP_CONTENT,
     )
 
+    private fun EditText.styleInput() {
+        textSize = 16f
+        setTextColor(ui.text)
+        setHintTextColor(ui.muted)
+        background = quietSurface()
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+    }
+
+    private fun cardSurface(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(ui.surface)
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(1), ui.glassStroke)
+        }
+    }
+
+    private fun quietSurface(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(ui.surfaceAlt)
+            cornerRadius = dp(14).toFloat()
+            setStroke(dp(1), ui.glassStroke)
+        }
+    }
+
     private fun glassSurface(): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(ui.glassTop, ui.glassBottom),
-        ).apply {
-            cornerRadius = dp(10).toFloat()
+        return GradientDrawable().apply {
+            setColor(ui.glassTop)
+            cornerRadius = dp(14).toFloat()
             setStroke(dp(1), ui.glassStroke)
         }
     }
 
     private fun accentSurface(): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(ui.primary, ui.accent),
-        ).apply {
-            cornerRadius = dp(8).toFloat()
-            setStroke(dp(1), ui.glassStroke)
+        return GradientDrawable().apply {
+            setColor(ui.primary)
+            cornerRadius = dp(14).toFloat()
         }
     }
 
     private fun headerSurface(): GradientDrawable {
         return GradientDrawable().apply {
             setColor(ui.header)
-            cornerRadius = dp(10).toFloat()
+            cornerRadius = dp(18).toFloat()
             setStroke(dp(1), ui.glassStroke)
         }
     }
@@ -811,9 +861,6 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_STUDENTS = 10
         private const val REQUEST_GRID = 11
-        private val SCORE_RED = Color.rgb(218, 74, 74)
-        private val SCORE_ORANGE = Color.rgb(222, 143, 48)
-        private val SCORE_GREEN = Color.rgb(71, 178, 122)
     }
 }
 
