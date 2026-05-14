@@ -1,0 +1,134 @@
+﻿package com.teob.appnotationmobile
+
+import android.app.Activity
+import org.json.JSONArray
+import org.json.JSONObject
+
+object ProjectStore {
+    private const val PREFS = "tp-project"
+    private const val KEY_PROJECTS = "projects"
+    private const val KEY = "data"
+
+    // Lit la nouvelle liste de projets, avec migration douce depuis l'ancien stockage à projet unique.
+    fun loadAll(activity: Activity): List<TpProject> {
+        val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
+        val rawProjects = prefs.getString(KEY_PROJECTS, null)
+        if (rawProjects != null) {
+            return runCatching {
+                val array = JSONArray(rawProjects)
+                (0 until array.length()).map { parseProject(array.getJSONObject(it)) }
+            }.getOrDefault(emptyList())
+        }
+
+        val legacy = prefs.getString(KEY, null)
+            ?.let { raw -> runCatching { parseProject(JSONObject(raw)) }.getOrNull() }
+        return if (legacy != null && legacy.hasContent()) {
+            saveAll(activity, listOf(legacy))
+            listOf(legacy)
+        } else {
+            emptyList()
+        }
+    }
+
+    fun save(activity: Activity, project: TpProject) {
+        if (!project.hasContent()) return
+        val projects = loadAll(activity).toMutableList()
+        val index = projects.indexOfFirst { it.id == project.id }
+        if (index >= 0) {
+            projects[index] = project
+        } else {
+            projects += project
+        }
+        saveAll(activity, projects)
+    }
+
+    fun delete(activity: Activity, projectId: String) {
+        saveAll(activity, loadAll(activity).filterNot { it.id == projectId })
+    }
+
+    private fun saveAll(activity: Activity, projects: List<TpProject>) {
+        val array = JSONArray(projects.map { it.toJson() })
+        activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PROJECTS, array.toString())
+            .apply()
+    }
+
+    private fun parseProject(json: JSONObject): TpProject {
+        return TpProject(
+            id = json.optString("id").ifBlank { "tp-${System.currentTimeMillis()}" },
+            name = json.optString("name"),
+            students = json.optJSONArray("students").toList { Student(getString("id"), getString("name")) },
+            criteria = json.optJSONArray("criteria").toList {
+                Criterion(
+                    getString("id"),
+                    getString("skill"),
+                    getString("label"),
+                    getDouble("weight"),
+                    optJSONObject("descriptors").toIntStringMap(),
+                )
+            },
+            grades = json.optJSONObject("grades").toGradeMap(),
+            pairMode = json.optBoolean("pairMode", false),
+            pairings = json.optJSONObject("pairings").toStringMap(),
+            gridKind = json.optString("gridKind", GridKind.EP_2I2D),
+            gridTemplateBase64 = json.optString("gridTemplateBase64"),
+        )
+    }
+
+    private fun TpProject.toJson(): JSONObject {
+        return JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("students", JSONArray(students.map { JSONObject().put("id", it.id).put("name", it.name) }))
+            .put(
+                "criteria",
+                JSONArray(criteria.map {
+                    JSONObject()
+                        .put("id", it.id)
+                        .put("skill", it.skill)
+                        .put("label", it.label)
+                        .put("weight", it.weight)
+                        .put("descriptors", JSONObject(it.descriptors.mapKeys { entry -> entry.key.toString() }))
+                }),
+            )
+            .put("grades", JSONObject(grades.mapValues { JSONObject(it.value as Map<*, *>) }))
+            .put("pairMode", pairMode)
+            .put("pairings", JSONObject(pairings as Map<*, *>))
+            .put("gridKind", gridKind)
+            .put("gridTemplateBase64", gridTemplateBase64)
+    }
+
+    private fun JSONObject?.toGradeMap(): MutableMap<String, MutableMap<String, Int>> {
+        val result = mutableMapOf<String, MutableMap<String, Int>>()
+        if (this == null) return result
+        keys().forEach { studentId ->
+            val gradeObject = getJSONObject(studentId)
+            result[studentId] = mutableMapOf<String, Int>().apply {
+                gradeObject.keys().forEach { criterionId -> put(criterionId, gradeObject.getInt(criterionId)) }
+            }
+        }
+        return result
+    }
+
+    private fun JSONObject?.toStringMap(): MutableMap<String, String> {
+        val result = mutableMapOf<String, String>()
+        if (this == null) return result
+        keys().forEach { key -> result[key] = optString(key) }
+        return result
+    }
+
+    private fun JSONObject?.toIntStringMap(): Map<Int, String> {
+        val result = mutableMapOf<Int, String>()
+        if (this == null) return result
+        keys().forEach { key ->
+            key.toIntOrNull()?.let { result[it] = optString(key) }
+        }
+        return result
+    }
+
+    private inline fun <T> JSONArray?.toList(build: JSONObject.() -> T): List<T> {
+        if (this == null) return emptyList()
+        return (0 until length()).map { getJSONObject(it).build() }
+    }
+}
