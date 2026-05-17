@@ -1,4 +1,4 @@
-package com.teob.appnotationmobile
+﻿package com.teob.appnotationmobile
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -9,10 +9,12 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
+import android.provider.OpenableColumns
 import android.text.InputType
 import android.util.Base64
 import android.util.TypedValue
-import android.util.Xml
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -25,21 +27,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import org.json.JSONArray
-import org.json.JSONObject
-import org.xmlpull.v1.XmlPullParser
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.io.OutputStream
 import java.text.DecimalFormat
-import java.text.Normalizer
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
@@ -62,6 +51,7 @@ class MainActivity : Activity() {
         showHome()
     }
 
+    // Point d'entrée des imports/exports Android : CSV élèves, XLSX grille, puis fichier XLSX généré.
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK) return
@@ -70,29 +60,33 @@ class MainActivity : Activity() {
             restoreProjectPendingImport()
             when (requestCode) {
                 REQUEST_STUDENTS -> {
-                    project.students = contentResolver.openInputStream(uri).useRequired { CsvStudentParser.parse(it) }
-                    project.grades = project.grades.filterKeys { id -> project.students.any { it.id == id } }.toMutableMap()
+                    val bytes = contentResolver.openInputStream(uri).useRequired { it.readBytes() }
+                    applyStudentList(bytes)
+                    ImportCacheStore.save(this, ImportCacheKind.STUDENTS, displayName(uri), bytes)
                     persistAndShowSetup("Liste élèves importée")
                 }
 
                 REQUEST_GRID -> {
                     val bytes = contentResolver.openInputStream(uri).useRequired { it.readBytes() }
-                    val grid = XlsxGridParser.parse(bytes)
-                    project.criteria = grid.criteria
-                    project.gridKind = grid.kind
-                    project.gridTemplateBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    applyGrid(bytes)
+                    ImportCacheStore.save(this, ImportCacheKind.GRIDS, displayName(uri), bytes)
                     persistAndShowSetup("Grille de notation importée")
                 }
 
                 REQUEST_EXPORT_GRID -> {
                     exportFilledGrid(uri)
                 }
+
+                REQUEST_EXPORT_ALL_GRIDS -> {
+                    exportAllGradedGrids(uri)
+                }
             }
         } catch (error: Exception) {
-            toast("Operation impossible: ${error.message ?: "fichier invalide"}")
+            toast("Opération impossible : ${error.message ?: "fichier invalide"}")
         }
     }
 
+    // Écran de configuration du TP : nom, élèves, grille et actions de préparation.
     private fun showTpSetup() {
         selectedStudentId = null
         pairEditMode = false
@@ -100,7 +94,7 @@ class MainActivity : Activity() {
         setContentView(
             verticalRoot {
                 addView(headerRow(
-                    title = if (project.name.isBlank()) "Nouveau TP" else "Reglages TP",
+                    title = if (project.name.isBlank()) "Nouveau TP" else "Réglages TP",
                     leading = {
                     addView(homeButton {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
@@ -127,25 +121,30 @@ class MainActivity : Activity() {
                 }
                 addView(nameInput, matchWrap())
 
-                addView(infoLine("Eleves", "${project.students.size} importes"))
+                addView(infoLine("Élèves", "${project.students.size} importés"))
                 addView(row {
                     addView(iconActionButton(
                         iconRes = R.drawable.ic_file_import,
-                        description = "Importer liste d'eleves CSV",
+                        description = "Importer liste d'élèves CSV",
                     ) {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
-                        pickFile(REQUEST_STUDENTS, "text/*")
+                        showImportCacheDialog(
+                            kind = ImportCacheKind.STUDENTS,
+                            title = "Importer une liste",
+                            requestCode = REQUEST_STUDENTS,
+                            mimeType = "text/*",
+                        ) { cached -> importCachedStudentList(cached) }
                     })
                     addView(iconActionButton(
                         iconRes = R.drawable.ic_person_add,
-                        description = "Ajouter un eleve",
+                        description = "Ajouter un élève",
                     ) {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
                         showAddStudentDialog { showTpSetup() }
                     })
                     addView(iconActionButton(
                         iconRes = R.drawable.ic_person_remove,
-                        description = "Enlever un eleve",
+                        description = "Enlever un élève",
                         enabled = project.students.isNotEmpty(),
                     ) {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
@@ -155,26 +154,31 @@ class MainActivity : Activity() {
 
                 if (project.pairings.isNotEmpty()) {
                     addView(spacer(12))
-                    addView(actionButton("Reset les binomes") {
+                    addView(actionButton("Réinitialiser les binômes") {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
                         unlinkAllStudents()
                         selectedStudentId = null
                         pairEditMode = false
                         saveCurrentProject()
-                        toast("Binomes reinitialises")
+                        toast("Binômes réinitialisés")
                         showTpSetup()
                     })
                 }
 
                 addView(spacer(12))
-                addView(infoLine("Grille", "${project.criteria.size} criteres"))
+                addView(infoLine("Grille", "${project.criteria.size} critères"))
                 addView(row {
                     addView(iconActionButton(
                         iconRes = R.drawable.ic_file_import,
                         description = "Importer feuille de notation XLSX",
                     ) {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
-                        pickFile(REQUEST_GRID, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        showImportCacheDialog(
+                            kind = ImportCacheKind.GRIDS,
+                            title = "Importer une grille",
+                            requestCode = REQUEST_GRID,
+                            mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        ) { cached -> importCachedGrid(cached) }
                     })
                     addView(iconActionButton(
                         iconRes = R.drawable.ic_grid_export,
@@ -188,7 +192,7 @@ class MainActivity : Activity() {
                 })
                 if (project.criteria.isNotEmpty()) {
                     addView(spacer(8))
-                    addView(actionButton("Modifier les ponderations") {
+                    addView(actionButton("Modifier les pondérations") {
                         project.name = nameInput?.text?.toString()?.trim().orEmpty()
                         saveCurrentProject()
                         showWeightSettings()
@@ -200,7 +204,7 @@ class MainActivity : Activity() {
                     project.name = nameInput?.text?.toString()?.trim().orEmpty()
                     when {
                         project.name.isBlank() -> toast("Donne d'abord un nom au TP.")
-                        project.students.isEmpty() -> toast("Importe ou charge une liste d'eleves.")
+                        project.students.isEmpty() -> toast("Importe ou charge une liste d'élèves.")
                         project.criteria.isEmpty() -> toast("Importe ou charge une grille de notation.")
                         else -> {
                             saveCurrentProject()
@@ -214,7 +218,7 @@ class MainActivity : Activity() {
                     addView(actionButton("Supprimer ce TP") {
                         AlertDialog.Builder(this@MainActivity)
                             .setTitle("Supprimer ce TP ?")
-                            .setMessage("Le TP et ses notes locales seront supprimes de la liste.")
+                            .setMessage("Le TP et ses notes locales seront supprimés de la liste.")
                             .setPositiveButton("Supprimer") { _, _ ->
                                 ProjectStore.delete(this@MainActivity, project.id)
                                 projects = ProjectStore.loadAll(this@MainActivity).toMutableList()
@@ -298,7 +302,7 @@ class MainActivity : Activity() {
 
     private fun projectRow(existingProject: TpProject): View {
         return Button(this).apply {
-            val subtitle = "${existingProject.students.size} eleves · Moyenne ${averageLabel(existingProject)}"
+            val subtitle = "${existingProject.students.size} élèves - Moyenne ${averageLabel(existingProject)}"
             text = "${existingProject.name.ifBlank { "TP sans nom" }}\n$subtitle"
             textSize = 16f
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
@@ -340,7 +344,7 @@ class MainActivity : Activity() {
         setContentView(
             verticalRoot {
                 addView(headerRow(
-                    title = "Ponderations",
+                    title = "Pondérations",
                     leading = {
                     addView(backButton {
                         saveWeights(inputs)
@@ -353,7 +357,7 @@ class MainActivity : Activity() {
                 ))
 
                 addView(TextView(this@MainActivity).apply {
-                    text = "Ces valeurs sont utilisees pour calculer les notes et la moyenne du TP."
+                    text = "Ces valeurs sont utilisées pour calculer les notes et la moyenne du TP."
                     textSize = 15f
                     setTextColor(ui.muted)
                     setPadding(dp(2), dp(10), dp(2), dp(16))
@@ -368,7 +372,7 @@ class MainActivity : Activity() {
 
                 addView(actionButton("Enregistrer") {
                     saveWeights(inputs)
-                    toast("Ponderations enregistrees")
+                    toast("Pondérations enregistrées")
                     showTpSetup()
                 })
             },
@@ -415,7 +419,7 @@ class MainActivity : Activity() {
         }
         val invalid = parsedWeights.values.any { it == null || it < 0.0 }
         if (invalid) {
-            toast("Certaines ponderations invalides ont ete ignorees.")
+            toast("Certaines pondérations invalides ont été ignorées.")
         }
         project.criteria.forEach { criterion ->
             val weight = parsedWeights[criterion.id]
@@ -475,8 +479,8 @@ class MainActivity : Activity() {
                 if (pairEditMode) {
                     addView(TextView(this@MainActivity).apply {
                         text = selectedStudentId
-                            ?.let { "Selectionne le deuxieme eleve du binome." }
-                            ?: "Selectionne deux eleves pour creer un binome. Utilise la croix pour defaire un lien."
+                            ?.let { "Sélectionne le deuxième élève du binôme." }
+                            ?: "Sélectionne deux élèves pour créer un binôme. Utilise la croix pour défaire un lien."
                         textSize = 15f
                         setTextColor(ui.muted)
                         setPadding(dp(2), 0, dp(2), dp(10))
@@ -514,6 +518,7 @@ class MainActivity : Activity() {
         }
     }
 
+    // Écran de notation d'un élève ou d'un binôme, avec score recalculé à chaque saisie.
     private fun showStudentGrade(student: Student) {
         selectedStudentId = student.id
         val grades = project.grades.getOrPut(gradeOwnerId(student.id)) { mutableMapOf() }
@@ -577,7 +582,7 @@ class MainActivity : Activity() {
             background = cardSurface()
             setPadding(dp(16), dp(14), dp(16), dp(16))
             addView(TextView(this@MainActivity).apply {
-                text = "${criterion.label}\nPondération: ${weightLabel(criterion.weight)}"
+                text = "${criterion.label}\nPondération : ${weightLabel(criterion.weight)}"
                 textSize = scaledGradeTextSize(16f)
                 setTextColor(ui.text)
                 setPadding(0, dp(3), 0, dp(8))
@@ -642,6 +647,64 @@ class MainActivity : Activity() {
             },
             requestCode,
         )
+    }
+
+    private fun showImportCacheDialog(
+        kind: ImportCacheKind,
+        title: String,
+        requestCode: Int,
+        mimeType: String,
+        onCachedSelected: (CachedImport) -> Unit,
+    ) {
+        val cachedFiles = ImportCacheStore.load(this, kind)
+        if (cachedFiles.isEmpty()) {
+            pickFile(requestCode, mimeType)
+            return
+        }
+        val labels = (cachedFiles.map { it.name } + "Ouvrir l'explorateur").toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setItems(labels) { _, index ->
+                val cached = cachedFiles.getOrNull(index)
+                if (cached != null) {
+                    onCachedSelected(cached)
+                } else {
+                    pickFile(requestCode, mimeType)
+                }
+            }
+            .show()
+    }
+
+    private fun importCachedStudentList(cached: CachedImport) {
+        applyStudentList(Base64.decode(cached.contentBase64, Base64.DEFAULT))
+        persistAndShowSetup("Liste élèves chargée depuis le cache")
+    }
+
+    private fun importCachedGrid(cached: CachedImport) {
+        applyGrid(Base64.decode(cached.contentBase64, Base64.DEFAULT))
+        persistAndShowSetup("Grille chargée depuis le cache")
+    }
+
+    private fun applyStudentList(bytes: ByteArray) {
+        project.students = CsvStudentParser.parse(bytes.inputStream())
+        project.grades = project.grades.filterKeys { id -> project.students.any { it.id == id } }.toMutableMap()
+    }
+
+    private fun applyGrid(bytes: ByteArray) {
+        val grid = XlsxGridParser.parse(bytes)
+        project.criteria = grid.criteria
+        project.gridKind = grid.kind
+        project.gridTemplateBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    private fun displayName(uri: Uri): String {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0) return cursor.getString(index)
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null } ?: "fichier importé"
     }
 
     private fun persistAndShowSetup(message: String) {
@@ -717,7 +780,7 @@ class MainActivity : Activity() {
                 })
             } else {
                 val groups = pairGroups(project)
-                addView(recapLine("Moyenne binomes", averageLabel(), scoreColor(averageScore(project))))
+                addView(recapLine("Moyenne binômes", averageLabel(), scoreColor(averageScore(project))))
                 addView(TextView(this@MainActivity).apply {
                     text = "${gradedCount()} / ${groups.size} groupes"
                     textSize = 15f
@@ -733,14 +796,15 @@ class MainActivity : Activity() {
         }
     }
 
+    // Dialogue de consultation : il garde les descripteurs accessibles sans alourdir la notation.
     private fun showCompetencyDescriptions() {
         if (!hasDescriptors()) {
-            toast("Aucun descripteur trouve dans la grille.")
+            toast("Aucun descripteur trouvé dans la grille.")
             return
         }
         val dialog = AlertDialog.Builder(this)
             .setCustomTitle(TextView(this).apply {
-                text = "Descripteurs des competences"
+                text = "Descripteurs des compétences"
                 textSize = 20f
                 setTextColor(ui.text)
                 setTypeface(null, android.graphics.Typeface.BOLD)
@@ -800,11 +864,11 @@ class MainActivity : Activity() {
     private fun showExportCandidateDialog() {
         val groups = pairGroups(project)
         if (groups.isEmpty()) {
-            toast("Aucun eleve a exporter.")
+            toast("Aucun élève à exporter.")
             return
         }
         if (project.gridTemplateBase64.isBlank()) {
-            toast("Reimporte la grille pour activer l'export XLSX.")
+            toast("Réimporte la grille pour activer l'export XLSX.")
             return
         }
         val labels = groups.map { exportGroupLabel(it) }.toTypedArray()
@@ -816,7 +880,30 @@ class MainActivity : Activity() {
                 PendingExportPrefs.save(this, project.id, ownerId, labels[index])
                 createExportDocument(labels[index])
             }
+            .setNeutralButton("Tout exporter") { _, _ ->
+                startBulkExport()
+            }
             .show()
+    }
+
+    private fun startBulkExport() {
+        val gradedGroups = gradedExportGroups(project)
+        if (gradedGroups.isEmpty()) {
+            toast("Aucune note complète à exporter.")
+            return
+        }
+        saveCurrentProject()
+        PendingBulkExportPrefs.save(this, project.id)
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                )
+            },
+            REQUEST_EXPORT_ALL_GRIDS,
+        )
     }
 
     private fun createExportDocument(label: String) {
@@ -836,18 +923,98 @@ class MainActivity : Activity() {
 
     private fun exportFilledGrid(uri: Uri) {
         val pending = PendingExportPrefs.load(this)
-            ?: throw IllegalArgumentException("export non prepare")
+            ?: throw IllegalArgumentException("export non préparé")
         val storedProject = ProjectStore.loadAll(this).firstOrNull { it.id == pending.projectId }
         if (storedProject != null) project = storedProject
         val template = Base64.decode(project.gridTemplateBase64, Base64.DEFAULT)
         val grades = project.grades[pending.ownerId] ?: emptyMap()
         val output = XlsxGridExporter.fill(project, template, pending.label, grades)
         contentResolver.openOutputStream(uri).useRequired { it.write(output) }
-        toast("Grille exportee")
+        toast("Grille exportée")
+    }
+
+    private fun exportAllGradedGrids(treeUri: Uri) {
+        contentResolver.takePersistableUriPermission(
+            treeUri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+        )
+        val projectId = PendingBulkExportPrefs.load(this)
+            ?: throw IllegalArgumentException("export groupé non préparé")
+        val storedProject = ProjectStore.loadAll(this).firstOrNull { it.id == projectId }
+            ?: throw IllegalArgumentException("TP introuvable")
+        project = storedProject
+        val groups = gradedExportGroups(storedProject)
+        if (groups.isEmpty()) {
+            toast("Aucune note complète à exporter.")
+            return
+        }
+
+        val exportsDirectory = findOrCreateExportsDirectory(treeUri)
+        val template = Base64.decode(storedProject.gridTemplateBase64, Base64.DEFAULT)
+        groups.forEach { group ->
+            val label = exportGroupLabel(group)
+            val ownerId = gradeOwnerId(storedProject, group.first().id)
+            val grades = storedProject.grades[ownerId] ?: emptyMap()
+            val output = XlsxGridExporter.fill(storedProject, template, label, grades)
+            val fileUri = DocumentsContract.createDocument(
+                contentResolver,
+                exportsDirectory,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "${exportFileBaseName(label)}.xlsx",
+            ) ?: throw IllegalArgumentException("création du fichier impossible")
+            contentResolver.openOutputStream(fileUri).useRequired { it.write(output) }
+        }
+        toast("${groups.size} grille(s) exportée(s)")
+    }
+
+    private fun gradedExportGroups(targetProject: TpProject): List<List<Student>> {
+        return pairGroups(targetProject).filter { group ->
+            computeScore(targetProject, gradesForStudent(targetProject, group.first().id)) != null
+        }
+    }
+
+    private fun findOrCreateExportsDirectory(treeUri: Uri): Uri {
+        val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        findChildDirectory(treeUri, treeDocumentId, "exports")?.let { return it }
+        val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
+        return DocumentsContract.createDocument(contentResolver, parentUri, Document.MIME_TYPE_DIR, "exports")
+            ?: throw IllegalArgumentException("création du dossier exports impossible")
+    }
+
+    private fun findChildDirectory(treeUri: Uri, parentDocumentId: String, name: String): Uri? {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocumentId)
+        contentResolver.query(
+            childrenUri,
+            arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID)
+            val nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME)
+            val mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE)
+            while (cursor.moveToNext()) {
+                val childName = cursor.getString(nameColumn)
+                val childMime = cursor.getString(mimeColumn)
+                if (childName == name && childMime == Document.MIME_TYPE_DIR) {
+                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idColumn))
+                }
+            }
+        }
+        return null
     }
 
     private fun exportGroupLabel(group: List<Student>): String {
         return group.joinToString(" + ") { it.name }
+    }
+
+    private fun exportFileBaseName(label: String): String {
+        val projectName = project.name.ifBlank { "TP" }
+        val cleanLabel = label
+            .replace(Regex("[^A-Za-z0-9 _-]"), "")
+            .trim()
+            .ifBlank { "candidat" }
+        return "$projectName - $cleanLabel"
     }
 
     private fun recapLine(label: String, score: String, color: Int): View {
@@ -896,9 +1063,9 @@ class MainActivity : Activity() {
 
     private fun pairModeActionLabel(): String {
         return when {
-            !project.pairMode -> "Mode binome"
-            pairEditMode -> "Terminer les binomes"
-            else -> "Mode binome"
+            !project.pairMode -> "Mode binôme"
+            pairEditMode -> "Terminer les binômes"
+            else -> "Mode binôme"
         }
     }
 
@@ -999,12 +1166,12 @@ class MainActivity : Activity() {
     private fun showAddStudentDialog(onDone: () -> Unit) {
         val input = EditText(this).apply {
             setSingleLine(true)
-            hint = "Nom de l'eleve"
+            hint = "Nom de l'élève"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
             styleInput()
         }
         AlertDialog.Builder(this)
-            .setTitle("Ajouter un eleve")
+            .setTitle("Ajouter un élève")
             .setView(input)
             .setPositiveButton("Ajouter") { _, _ ->
                 val name = cleanStudentName(input.text.toString())
@@ -1022,17 +1189,17 @@ class MainActivity : Activity() {
 
     private fun showRemoveStudentDialog(onDone: () -> Unit) {
         if (project.students.isEmpty()) {
-            toast("Aucun eleve a enlever.")
+            toast("Aucun élève à enlever.")
             return
         }
         val labels = project.students.map { it.name }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("Enlever un eleve")
+            .setTitle("Enlever un élève")
             .setItems(labels) { _, index ->
                 val student = project.students.getOrNull(index) ?: return@setItems
                 AlertDialog.Builder(this)
                     .setTitle("Enlever ${student.name} ?")
-                    .setMessage("Ses notes locales seront supprimees.")
+                    .setMessage("Ses notes locales seront supprimées.")
                     .setPositiveButton("Enlever") { _, _ ->
                         removeStudent(student)
                         saveCurrentProject()
@@ -1053,12 +1220,7 @@ class MainActivity : Activity() {
         return scoreLabel(averageScore(targetProject))
     }
 
-    private fun averageScore(targetProject: TpProject): Double? {
-        val scores = scoreGroups(targetProject).mapNotNull { (_, grades) -> computeScore(targetProject, grades) }
-        return scores.takeIf { it.isNotEmpty() }?.average()
-    }
-
-    private fun gradedCount(): Int = scoreGroups(project).count { (_, grades) -> computeScore(project, grades) != null }
+    private fun gradedCount(): Int = gradedCount(project)
 
     private fun scoreForStudent(studentId: String): Double? {
         return computeScore(project, gradesForStudent(project, studentId))
@@ -1079,13 +1241,13 @@ class MainActivity : Activity() {
                 ?.let { "${gradeFormat.format(it)} / 20" } ?: "A noter"
             "$label: $score"
         }
-        return "Moyenne binomes: ${averageLabel()}   |   ${gradedCount()} / ${groups.size} groupes\n$lines"
+        return "Moyenne binômes : ${averageLabel()}   |   ${gradedCount()} / ${groups.size} groupes\n$lines"
     }
 
     private fun studentSubtitle(student: Student): String {
         val partner = partnerOf(student.id)
         return if (project.pairMode && partner != null) {
-            "Binome avec ${partner.name} · ${scoreLabel(student.id)}"
+            "Binôme avec ${partner.name} - ${scoreLabel(student.id)}"
         } else {
             scoreLabel(student.id)
         }
@@ -1096,20 +1258,12 @@ class MainActivity : Activity() {
         return if (project.pairMode && partner != null) "${student.name} + ${partner.name}" else student.name
     }
 
-    private fun familyName(fullName: String): String {
-        val parts = fullName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (parts.isEmpty()) return fullName
-        val uppercasePrefix = parts.takeWhile { part ->
-            part.any { it.isLetter() } && part == part.uppercase(Locale.ROOT)
-        }
-        return uppercasePrefix.takeIf { it.isNotEmpty() }?.joinToString(" ") ?: parts.first()
-    }
-
     private fun partnerOf(studentId: String): Student? {
         val partnerId = project.pairings[studentId] ?: return null
         return project.students.firstOrNull { it.id == partnerId }
     }
 
+    // En mode binôme, les deux élèves partagent une même entrée de notes identifiée par un id canonique.
     private fun linkStudents(firstId: String, secondId: String) {
         if (firstId == secondId) return
         unlinkStudent(firstId)
@@ -1158,45 +1312,11 @@ class MainActivity : Activity() {
             pairEditMode = false
             selectedStudentId = null
         }
-        toast("Eleve enleve")
+        toast("Élève enlevé")
     }
 
     private fun gradeOwnerId(studentId: String): String {
-        val partnerId = project.pairings[studentId]
-        return if (project.pairMode && partnerId != null) canonicalPairId(studentId, partnerId) else studentId
-    }
-
-    private fun gradeOwnerId(targetProject: TpProject, studentId: String): String {
-        val partnerId = targetProject.pairings[studentId]
-        return if (targetProject.pairMode && partnerId != null) canonicalPairId(studentId, partnerId) else studentId
-    }
-
-    private fun gradesForStudent(targetProject: TpProject, studentId: String): Map<String, Int> {
-        return targetProject.grades[gradeOwnerId(targetProject, studentId)]
-            ?: targetProject.grades[studentId]
-            ?: emptyMap()
-    }
-
-    private fun scoreGroups(targetProject: TpProject): List<Pair<List<Student>, Map<String, Int>>> {
-        return pairGroups(targetProject).map { group -> group to gradesForStudent(targetProject, group.first().id) }
-    }
-
-    private fun pairGroups(targetProject: TpProject): List<List<Student>> {
-        val seen = mutableSetOf<String>()
-        return targetProject.students.mapNotNull { student ->
-            if (!seen.add(student.id)) return@mapNotNull null
-            val partner = targetProject.pairings[student.id]
-                ?.let { partnerId -> targetProject.students.firstOrNull { it.id == partnerId } }
-            if (targetProject.pairMode && partner != null && seen.add(partner.id)) {
-                listOf(student, partner)
-            } else {
-                listOf(student)
-            }
-        }
-    }
-
-    private fun canonicalPairId(firstId: String, secondId: String): String {
-        return listOf(firstId, secondId).sorted().joinToString("+")
+        return gradeOwnerId(project, studentId)
     }
 
     private fun uniqueStudentId(name: String): String {
@@ -1211,40 +1331,8 @@ class MainActivity : Activity() {
         return candidate
     }
 
-    private fun computeScore(grades: Map<String, Int>): Double? {
-        return computeScore(project, grades)
-    }
-
-    private fun computeScore(targetProject: TpProject, grades: Map<String, Int>): Double? {
-        if (targetProject.criteria.isEmpty()) return null
-        val evaluated = targetProject.criteria.mapNotNull { criterion ->
-            val level = grades[criterion.id] ?: return@mapNotNull null
-            if (level < 0) null else criterion to level
-        }
-        if (evaluated.isEmpty()) return null
-        val missing = targetProject.criteria.any { criterion -> !grades.containsKey(criterion.id) }
-        if (missing) return null
-        val totalWeight = evaluated.sumOf { it.first.weight }
-        if (totalWeight <= 0.0) return null
-        return evaluated.sumOf { (criterion, level) -> (level / 3.0) * criterion.weight } / totalWeight * 20.0
-    }
-
     private fun groupedCriteria(): List<Pair<String, List<Criterion>>> {
-        return project.criteria
-            .groupBy { normalizeHeader(it.skill) }
-            .map { (_, criteria) -> preferredSkillLabel(criteria) to criteria }
-    }
-
-    private fun preferredSkillLabel(criteria: List<Criterion>): String {
-        return criteria.firstOrNull { hasAccent(it.skill) }?.skill
-            ?: criteria.firstOrNull()?.skill
-            ?: ""
-    }
-
-    private fun hasAccent(text: String): Boolean {
-        return Normalizer.normalize(text, Normalizer.Form.NFD).any { char ->
-            Character.getType(char) == Character.NON_SPACING_MARK.toInt()
-        }
+        return groupedCriteria(project)
     }
 
     private fun weightLabel(weight: Double): String {
@@ -1444,7 +1532,7 @@ class MainActivity : Activity() {
         background = quietSurface()
         setImageResource(R.drawable.ic_settings)
         setColorFilter(ui.primary)
-        contentDescription = "Reglages"
+        contentDescription = "Réglages"
         setOnClickListener { onClick() }
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
@@ -1480,7 +1568,7 @@ class MainActivity : Activity() {
         background = quietSurface()
         setImageResource(R.drawable.ic_info)
         setColorFilter(ui.primary)
-        contentDescription = "Descripteurs des competences"
+        contentDescription = "Descripteurs des compétences"
         setOnClickListener { onClick() }
     }.also {
         it.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply {
@@ -1618,728 +1706,7 @@ class MainActivity : Activity() {
         private const val REQUEST_STUDENTS = 10
         private const val REQUEST_GRID = 11
         private const val REQUEST_EXPORT_GRID = 12
+        private const val REQUEST_EXPORT_ALL_GRIDS = 13
     }
 }
 
-data class TpProject(
-    var id: String = "tp-${System.currentTimeMillis()}",
-    var name: String = "",
-    var students: List<Student> = emptyList(),
-    var criteria: List<Criterion> = emptyList(),
-    var grades: MutableMap<String, MutableMap<String, Int>> = mutableMapOf(),
-    var pairMode: Boolean = false,
-    var pairings: MutableMap<String, String> = mutableMapOf(),
-    var gridKind: String = GridKind.EP_2I2D,
-    var gridTemplateBase64: String = "",
-)
-
-private fun TpProject.hasContent(): Boolean {
-    return name.isNotBlank() || students.isNotEmpty() || criteria.isNotEmpty() || grades.isNotEmpty() || pairings.isNotEmpty() || gridTemplateBase64.isNotBlank()
-}
-
-enum class StudentFilter {
-    ALL,
-    TO_GRADE,
-    GRADED,
-}
-
-data class Student(val id: String, val name: String)
-
-data class Criterion(
-    val id: String,
-    val skill: String,
-    val label: String,
-    var weight: Double,
-    val descriptors: Map<Int, String> = emptyMap(),
-)
-
-data class GridImport(
-    val criteria: List<Criterion>,
-    val kind: String,
-)
-
-object GridKind {
-    const val EP_2I2D = "ep_2i2d"
-    const val ETLV = "etlv"
-}
-
-object CsvStudentParser {
-    fun parse(input: InputStream): List<Student> {
-        val bytes = input.readBytes()
-        val utf8 = bytes.toString(Charsets.UTF_8)
-        val content = if (utf8.contains('\uFFFD')) bytes.toString(Charsets.ISO_8859_1) else utf8
-        return content
-            .lineSequence()
-            .mapNotNull { rawLine -> extractName(rawLine) }
-            .distinctBy { it.lowercase(Locale.ROOT) }
-            .mapIndexed { index, name -> Student("student-$index-${name.lowercase(Locale.ROOT).hashCode()}", name) }
-            .toList()
-    }
-
-    private fun extractName(rawLine: String): String? {
-        val line = rawLine.trim().trimStart('\uFEFF')
-        if (line.isBlank()) return null
-        val separator = detectSeparator(line)
-        val columns = splitCsvLine(line, separator).map { cleanStudentName(it) }
-        val lowerColumns = columns.map { normalizeHeader(it) }
-        if (lowerColumns.any { it == "nom" || it == "prenom" || it == "name" || it.startsWith("sp") }) return null
-        val textColumns = columns.filter { candidate ->
-            candidate.any { it.isLetter() } && !candidate.contains("@")
-        }
-        val name = textColumns.firstOrNull { it.contains(" ") } ?: textColumns.take(2).joinToString(" ")
-        return name.takeIf { it.isNotBlank() }
-    }
-
-    private fun detectSeparator(line: String): Char {
-        return listOf(';', ',', '\t')
-            .maxByOrNull { separator -> line.count { it == separator } }
-            ?.takeIf { line.contains(it) }
-            ?: ';'
-    }
-
-    private fun splitCsvLine(line: String, separator: Char): List<String> {
-        val columns = mutableListOf<String>()
-        val current = StringBuilder()
-        var quoted = false
-        var index = 0
-        while (index < line.length) {
-            val char = line[index]
-            when {
-                char == '"' && quoted && index + 1 < line.length && line[index + 1] == '"' -> {
-                    current.append('"')
-                    index += 1
-                }
-                char == '"' -> quoted = !quoted
-                char == separator && !quoted -> {
-                    columns += current.toString()
-                    current.clear()
-                }
-                else -> current.append(char)
-            }
-            index += 1
-        }
-        columns += current.toString()
-        return columns
-    }
-}
-
-private fun normalizeHeader(raw: String): String {
-    return Normalizer.normalize(raw.lowercase(Locale.ROOT), Normalizer.Form.NFD)
-        .replace(Regex("\\p{Mn}+"), "")
-}
-
-private fun cleanStudentName(raw: String): String {
-    return raw
-        .trim()
-        .trim('"')
-        .trim()
-        .replace(Regex("\\s+"), " ")
-        .trim(';', ',', '\t', ' ')
-}
-
-object XlsxGridParser {
-    fun parse(bytes: ByteArray): GridImport {
-        val entries = readZipEntries(ByteArrayInputStream(bytes))
-        val sharedStrings = parseSharedStrings(entries["xl/sharedStrings.xml"] ?: ByteArray(0))
-        val sheets = workbookSheets(entries)
-        val grilleSheet = entries[sheets["Grille"] ?: "xl/worksheets/sheet2.xml"]
-        if (grilleSheet == null) return parseEtlv(entries, sharedStrings, sheets)
-        val descriptors = entries[sheets["Descripteurs"] ?: "xl/worksheets/sheet3.xml"]
-            ?.let { parseDescriptors(it, sharedStrings) }
-            .orEmpty()
-        val cells = parseCells(grilleSheet, sharedStrings)
-        val criteria = (8..21).mapNotNull { row ->
-            val label = cells["D$row"]?.trim().orEmpty()
-            if (label.isBlank()) return@mapNotNull null
-            val skill = cells["B$row"]?.trim().takeUnless { it.isNullOrBlank() }
-                ?: when (row) {
-                    in 8..9 -> "Analyser"
-                    in 10..13 -> "Concevoir"
-                    in 14..17 -> "Simuler"
-                    else -> "Experimenter"
-                }
-            Criterion(
-                id = "criterion-$row",
-                skill = skill,
-                label = label,
-                weight = cells["M$row"]?.toDoubleOrNull() ?: 1.0,
-                descriptors = descriptors[normalizeHeader(label)] ?: descriptors["criterion-$row"].orEmpty(),
-            )
-        }
-        return GridImport(criteria, GridKind.EP_2I2D)
-    }
-
-    private fun parseEtlv(
-        entries: Map<String, ByteArray>,
-        sharedStrings: List<String>,
-        sheets: Map<String, String>,
-    ): GridImport {
-        val sheet = entries[sheets["Candidat 1"] ?: "xl/worksheets/sheet1.xml"]
-            ?: throw IllegalArgumentException("Feuille de notation introuvable")
-        val cells = parseCells(sheet, sharedStrings)
-        val criteria = (1..80).mapNotNull { row ->
-            val label = cells["A$row"]?.trim().orEmpty()
-            val weight = cells["J$row"]?.toDoubleOrNull() ?: return@mapNotNull null
-            if (!label.contains(" - ") || weight <= 0.0) return@mapNotNull null
-            val code = label.substringBefore(" - ").trim()
-            Criterion(
-                id = "criterion-$row",
-                skill = code,
-                label = label,
-                weight = weight,
-            )
-        }
-        if (criteria.isEmpty()) throw IllegalArgumentException("Aucun critere reconnu")
-        return GridImport(criteria, GridKind.ETLV)
-    }
-
-    private fun workbookSheets(entries: Map<String, ByteArray>): Map<String, String> {
-        val workbook = entries["xl/workbook.xml"] ?: return emptyMap()
-        val relationships = entries["xl/_rels/workbook.xml.rels"] ?: return emptyMap()
-        val targetsById = workbookRelationships(relationships)
-        val parser = Xml.newPullParser()
-        parser.setInput(ByteArrayInputStream(workbook), null)
-        val sheets = mutableMapOf<String, String>()
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && parser.name == "sheet") {
-                val name = parser.getAttributeValue(null, "name").orEmpty()
-                val id = parser.getAttributeValue("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id").orEmpty()
-                val target = targetsById[id].orEmpty()
-                if (name.isNotBlank() && target.isNotBlank()) {
-                    sheets[name] = if (target.startsWith("xl/")) target else "xl/$target"
-                }
-            }
-            event = parser.next()
-        }
-        return sheets
-    }
-
-    private fun workbookRelationships(bytes: ByteArray): Map<String, String> {
-        val parser = Xml.newPullParser()
-        parser.setInput(ByteArrayInputStream(bytes), null)
-        val relationships = mutableMapOf<String, String>()
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && parser.name == "Relationship") {
-                val id = parser.getAttributeValue(null, "Id").orEmpty()
-                val target = parser.getAttributeValue(null, "Target").orEmpty()
-                if (id.isNotBlank() && target.isNotBlank()) relationships[id] = target
-            }
-            event = parser.next()
-        }
-        return relationships
-    }
-
-    private fun parseDescriptors(bytes: ByteArray, sharedStrings: List<String>): Map<String, Map<Int, String>> {
-        val cells = parseCells(bytes, sharedStrings)
-        val result = mutableMapOf<String, Map<Int, String>>()
-        (1..80).forEach { row ->
-            val label = cells["C$row"]?.trim().orEmpty()
-            if (label.isBlank() || normalizeHeader(label).startsWith("criteres d'evaluation")) return@forEach
-            val levels = mapOf(
-                0 to cells["D$row"].orEmpty().trim(),
-                1 to cells["E$row"].orEmpty().trim(),
-                2 to cells["F$row"].orEmpty().trim(),
-                3 to cells["G$row"].orEmpty().trim(),
-            ).filterValues { it.isNotBlank() }
-            if (levels.isNotEmpty()) {
-                result[normalizeHeader(label)] = levels
-                result["criterion-${row + 3}"] = levels
-            }
-        }
-        return result
-    }
-
-    private fun readZipEntries(input: InputStream): Map<String, ByteArray> {
-        val entries = mutableMapOf<String, ByteArray>()
-        ZipInputStream(input).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                val output = ByteArrayOutputStream()
-                zip.copyTo(output)
-                entries[entry.name] = output.toByteArray()
-            }
-        }
-        return entries
-    }
-
-    private fun parseSharedStrings(bytes: ByteArray): List<String> {
-        if (bytes.isEmpty()) return emptyList()
-        val parser = Xml.newPullParser()
-        parser.setInput(ByteArrayInputStream(bytes), null)
-        val strings = mutableListOf<String>()
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && parser.name == "si") {
-                strings += readSharedString(parser)
-            }
-            event = parser.next()
-        }
-        return strings
-    }
-
-    private fun readSharedString(parser: XmlPullParser): String {
-        val builder = StringBuilder()
-        while (true) {
-            when (parser.next()) {
-                XmlPullParser.START_TAG -> {
-                    if (parser.name == "t") builder.append(parser.nextText())
-                }
-
-                XmlPullParser.END_TAG -> if (parser.name == "si") return builder.toString()
-            }
-        }
-    }
-
-    private fun parseCells(bytes: ByteArray, sharedStrings: List<String>): Map<String, String> {
-        val parser = Xml.newPullParser()
-        parser.setInput(ByteArrayInputStream(bytes), null)
-        val cells = mutableMapOf<String, String>()
-        var ref = ""
-        var type = ""
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG && parser.name == "c") {
-                ref = parser.getAttributeValue(null, "r").orEmpty()
-                type = parser.getAttributeValue(null, "t").orEmpty()
-            }
-            if (event == XmlPullParser.START_TAG && parser.name == "v" && ref.isNotBlank()) {
-                val raw = parser.nextText()
-                cells[ref] = if (type == "s") sharedStrings.getOrNull(raw.toIntOrNull() ?: -1).orEmpty() else raw
-            }
-            event = parser.next()
-        }
-        return cells
-    }
-}
-
-object XlsxGridExporter {
-    fun fill(
-        project: TpProject,
-        template: ByteArray,
-        candidateLabel: String,
-        grades: Map<String, Int>,
-    ): ByteArray {
-        val entries = readZipEntries(template)
-        val sheetPath = when (project.gridKind) {
-            GridKind.ETLV -> "xl/worksheets/sheet1.xml"
-            else -> "xl/worksheets/sheet2.xml"
-        }
-        val sheet = entries[sheetPath]?.toString(Charsets.UTF_8)
-            ?: throw IllegalArgumentException("Feuille export introuvable")
-        entries[sheetPath] = when (project.gridKind) {
-            GridKind.ETLV -> fillEtlvSheet(sheet, project, candidateLabel, grades)
-            else -> fillEpSheet(sheet, project, candidateLabel, grades)
-        }.toByteArray(Charsets.UTF_8)
-        prepareWorkbookForRecalculation(entries)
-        return writeZipEntries(entries)
-    }
-
-    private fun fillEpSheet(
-        sheet: String,
-        project: TpProject,
-        candidateLabel: String,
-        grades: Map<String, Int>,
-    ): String {
-        var xml = sheet
-        xml = upsertCell(xml, "B28", candidateLabel, text = true)
-        xml = upsertCell(xml, "D26", exportDateLabel(), text = true)
-        xml = upsertCell(xml, "D28", project.name, text = true)
-        project.criteria.forEach { criterion ->
-            val row = criterion.rowNumber() ?: return@forEach
-            listOf("E", "F", "G", "H", "I").forEach { col -> xml = upsertCell(xml, "$col$row", "") }
-            val level = grades[criterion.id] ?: return@forEach
-            val col = when (level) {
-                -1 -> "E"
-                0 -> "F"
-                1 -> "G"
-                2 -> "H"
-                3 -> "I"
-                else -> null
-            } ?: return@forEach
-            xml = upsertCell(xml, "$col$row", "x", text = true)
-        }
-        return xml
-    }
-
-    private fun fillEtlvSheet(
-        sheet: String,
-        project: TpProject,
-        candidateLabel: String,
-        grades: Map<String, Int>,
-    ): String {
-        var xml = sheet
-        xml = upsertCell(xml, "B6", etlvLastNames(candidateLabel), text = true)
-        xml = upsertCell(xml, "B7", etlvFirstNames(candidateLabel), text = true)
-        xml = upsertCell(xml, "B24", exportDateLabel(), text = true)
-        xml = upsertCell(xml, "D24", project.name, text = true)
-        project.criteria.forEach { criterion ->
-            val row = criterion.rowNumber() ?: return@forEach
-            listOf("E", "F", "G", "H").forEach { col -> xml = upsertCell(xml, "$col$row", "") }
-            val level = grades[criterion.id] ?: return@forEach
-            val col = when (level.coerceIn(0, 3)) {
-                0 -> "E"
-                1 -> "F"
-                2 -> "G"
-                else -> "H"
-            }
-            xml = upsertCell(xml, "$col$row", "X", text = true)
-        }
-        return xml
-    }
-
-    private fun Criterion.rowNumber(): Int? {
-        return id.substringAfter("criterion-", "").toIntOrNull()
-    }
-
-    private fun exportDateLabel(): String {
-        return SimpleDateFormat("dd/MM/yyyy", Locale.FRANCE).format(Date())
-    }
-
-    private fun etlvLastNames(candidateLabel: String): String {
-        return candidateLabel.split(" + ")
-            .map { name -> exportFamilyName(name) }
-            .joinToString(" + ")
-    }
-
-    private fun etlvFirstNames(candidateLabel: String): String {
-        return candidateLabel.split(" + ")
-            .map { name -> exportGivenNames(name) }
-            .filter { it.isNotBlank() }
-            .joinToString(" + ")
-    }
-
-    private fun exportFamilyName(fullName: String): String {
-        val parts = fullName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (parts.isEmpty()) return fullName.trim()
-        val uppercasePrefix = parts.takeWhile { part ->
-            part.any { it.isLetter() } && part == part.uppercase(Locale.ROOT)
-        }
-        return uppercasePrefix.takeIf { it.isNotEmpty() }?.joinToString(" ") ?: parts.first()
-    }
-
-    private fun exportGivenNames(fullName: String): String {
-        val parts = fullName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (parts.size <= 1) return ""
-        val familyParts = parts.takeWhile { part ->
-            part.any { it.isLetter() } && part == part.uppercase(Locale.ROOT)
-        }.takeIf { it.isNotEmpty() } ?: parts.take(1)
-        return parts.drop(familyParts.size).joinToString(" ")
-    }
-
-    private fun upsertCell(xml: String, ref: String, value: String, text: Boolean = false): String {
-        val row = ref.dropWhile { it.isLetter() }.toIntOrNull() ?: return xml
-        val cellRegex = cellRegex(ref)
-        val existingCell = cellRegex.find(xml)
-        if (existingCell != null) {
-            val cell = cellXml(ref, value, text, existingCell.value)
-            return xml.replaceRange(existingCell.range, cell)
-        }
-
-        val cell = cellXml(ref, value, text)
-        val rowRegex = Regex("(<row\\b[^>]*\\br=\"$row\"[^>]*>)(.*?)(</row>)", RegexOption.DOT_MATCHES_ALL)
-        val rowMatch = rowRegex.find(xml)
-        if (rowMatch != null) {
-            val content = insertCellInOrder(rowMatch.groupValues[2], cell, ref)
-            return xml.replaceRange(rowMatch.range, rowMatch.groupValues[1] + content + rowMatch.groupValues[3])
-        }
-        val newRow = "<row r=\"$row\">$cell</row>"
-        return xml.replace("</sheetData>", "$newRow</sheetData>")
-    }
-
-    private fun cellRegex(ref: String): Regex {
-        return Regex(
-            "<c\\b(?=[^>]*\\br=\"$ref\")[^>]*/>|<c\\b(?=[^>]*\\br=\"$ref\")[^>]*>.*?</c>",
-            RegexOption.DOT_MATCHES_ALL,
-        )
-    }
-
-    private fun insertCellInOrder(rowContent: String, cell: String, ref: String): String {
-        val targetColumn = columnIndex(ref)
-        val cellRegex = Regex("<c\\b[^>]*\\br=\"([A-Z]+)\\d+\"[^>]*/>|<c\\b[^>]*\\br=\"([A-Z]+)\\d+\"[^>]*>.*?</c>", RegexOption.DOT_MATCHES_ALL)
-        val insertBefore = cellRegex.findAll(rowContent).firstOrNull { match ->
-            val column = match.groupValues[1].ifBlank { match.groupValues[2] }
-            columnIndex(column) > targetColumn
-        }
-        return if (insertBefore != null) {
-            rowContent.substring(0, insertBefore.range.first) + cell + rowContent.substring(insertBefore.range.first)
-        } else {
-            rowContent + cell
-        }
-    }
-
-    private fun columnIndex(ref: String): Int {
-        return ref.takeWhile { it.isLetter() }.fold(0) { total, char ->
-            total * 26 + (char.uppercaseChar() - 'A' + 1)
-        }
-    }
-
-    private fun cellXml(ref: String, value: String, text: Boolean, existingCell: String? = null): String {
-        val attrs = cellAttributes(ref, existingCell)
-        if (value.isBlank()) return "<c $attrs/>"
-        return if (text) {
-            "<c $attrs t=\"str\"><v>${escapeXml(value)}</v></c>"
-        } else {
-            "<c $attrs><v>$value</v></c>"
-        }
-    }
-
-    private fun cellAttributes(ref: String, existingCell: String?): String {
-        val rawAttrs = existingCell
-            ?.let { Regex("<c\\b([^>]*)").find(it)?.groupValues?.getOrNull(1) }
-            .orEmpty()
-        val style = Regex("\\bs=\"[^\"]*\"").find(rawAttrs)?.value
-        return listOfNotNull("r=\"$ref\"", style).joinToString(" ")
-    }
-
-    private fun escapeXml(value: String): String {
-        return value
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
-    }
-
-    private fun prepareWorkbookForRecalculation(entries: MutableMap<String, ByteArray>) {
-        entries.remove("xl/calcChain.xml")
-        entries["[Content_Types].xml"] = entries["[Content_Types].xml"]
-            ?.toString(Charsets.UTF_8)
-            ?.replace(Regex("<Override\\b[^>]*PartName=\"/xl/calcChain.xml\"[^>]*/>"), "")
-            ?.toByteArray(Charsets.UTF_8)
-            ?: return
-        entries["xl/_rels/workbook.xml.rels"] = entries["xl/_rels/workbook.xml.rels"]
-            ?.toString(Charsets.UTF_8)
-            ?.replace(Regex("<Relationship\\b[^>]*Type=\"[^\"]*/calcChain\"[^>]*/>"), "")
-            ?.toByteArray(Charsets.UTF_8)
-            ?: return
-        entries["xl/workbook.xml"] = entries["xl/workbook.xml"]
-            ?.toString(Charsets.UTF_8)
-            ?.let { workbook ->
-                val calcPr = "<calcPr calcMode=\"auto\" fullCalcOnLoad=\"1\" forceFullCalc=\"1\"/>"
-                val calcRegex = Regex("<calcPr\\b[^>]*/>|<calcPr\\b[^>]*>.*?</calcPr>", RegexOption.DOT_MATCHES_ALL)
-                if (calcRegex.containsMatchIn(workbook)) {
-                    workbook.replace(calcRegex, calcPr)
-                } else {
-                    workbook.replace("</workbook>", "$calcPr</workbook>")
-                }
-            }
-            ?.toByteArray(Charsets.UTF_8)
-            ?: return
-    }
-
-    private fun readZipEntries(bytes: ByteArray): MutableMap<String, ByteArray> {
-        val entries = linkedMapOf<String, ByteArray>()
-        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
-            while (true) {
-                val entry = zip.nextEntry ?: break
-                val output = ByteArrayOutputStream()
-                zip.copyTo(output)
-                entries[entry.name] = output.toByteArray()
-            }
-        }
-        return entries
-    }
-
-    private fun writeZipEntries(entries: Map<String, ByteArray>): ByteArray {
-        val output = ByteArrayOutputStream()
-        ZipOutputStream(output).use { zip ->
-            entries.forEach { (name, bytes) ->
-                zip.putNextEntry(ZipEntry(name))
-                zip.write(bytes)
-                zip.closeEntry()
-            }
-        }
-        return output.toByteArray()
-    }
-}
-
-object ProjectStore {
-    private const val PREFS = "tp-project"
-    private const val KEY_PROJECTS = "projects"
-    private const val KEY = "data"
-
-    fun loadAll(activity: Activity): List<TpProject> {
-        val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-        val rawProjects = prefs.getString(KEY_PROJECTS, null)
-        if (rawProjects != null) {
-            return runCatching {
-                val array = JSONArray(rawProjects)
-                (0 until array.length()).map { parseProject(array.getJSONObject(it)) }
-            }.getOrDefault(emptyList())
-        }
-
-        val legacy = prefs.getString(KEY, null)
-            ?.let { raw -> runCatching { parseProject(JSONObject(raw)) }.getOrNull() }
-        return if (legacy != null && legacy.hasContent()) {
-            saveAll(activity, listOf(legacy))
-            listOf(legacy)
-        } else {
-            emptyList()
-        }
-    }
-
-    fun save(activity: Activity, project: TpProject) {
-        if (!project.hasContent()) return
-        val projects = loadAll(activity).toMutableList()
-        val index = projects.indexOfFirst { it.id == project.id }
-        if (index >= 0) {
-            projects[index] = project
-        } else {
-            projects += project
-        }
-        saveAll(activity, projects)
-    }
-
-    fun delete(activity: Activity, projectId: String) {
-        saveAll(activity, loadAll(activity).filterNot { it.id == projectId })
-    }
-
-    private fun saveAll(activity: Activity, projects: List<TpProject>) {
-        val array = JSONArray(projects.map { it.toJson() })
-        activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PROJECTS, array.toString())
-            .apply()
-    }
-
-    private fun parseProject(json: JSONObject): TpProject {
-        return TpProject(
-            id = json.optString("id").ifBlank { "tp-${System.currentTimeMillis()}" },
-            name = json.optString("name"),
-            students = json.optJSONArray("students").toList { Student(getString("id"), getString("name")) },
-            criteria = json.optJSONArray("criteria").toList {
-                Criterion(
-                    getString("id"),
-                    getString("skill"),
-                    getString("label"),
-                    getDouble("weight"),
-                    optJSONObject("descriptors").toIntStringMap(),
-                )
-            },
-            grades = json.optJSONObject("grades").toGradeMap(),
-            pairMode = json.optBoolean("pairMode", false),
-            pairings = json.optJSONObject("pairings").toStringMap(),
-            gridKind = json.optString("gridKind", GridKind.EP_2I2D),
-            gridTemplateBase64 = json.optString("gridTemplateBase64"),
-        )
-    }
-
-    private fun TpProject.toJson(): JSONObject {
-        return JSONObject()
-            .put("id", id)
-            .put("name", name)
-            .put("students", JSONArray(students.map { JSONObject().put("id", it.id).put("name", it.name) }))
-            .put(
-                "criteria",
-                JSONArray(criteria.map {
-                    JSONObject()
-                        .put("id", it.id)
-                        .put("skill", it.skill)
-                        .put("label", it.label)
-                        .put("weight", it.weight)
-                        .put("descriptors", JSONObject(it.descriptors.mapKeys { entry -> entry.key.toString() }))
-                }),
-            )
-            .put("grades", JSONObject(grades.mapValues { JSONObject(it.value as Map<*, *>) }))
-            .put("pairMode", pairMode)
-            .put("pairings", JSONObject(pairings as Map<*, *>))
-            .put("gridKind", gridKind)
-            .put("gridTemplateBase64", gridTemplateBase64)
-    }
-
-    private fun TpProject.hasContent(): Boolean {
-        return name.isNotBlank() || students.isNotEmpty() || criteria.isNotEmpty() || grades.isNotEmpty() || pairings.isNotEmpty() || gridTemplateBase64.isNotBlank()
-    }
-
-    private fun JSONObject?.toGradeMap(): MutableMap<String, MutableMap<String, Int>> {
-        val result = mutableMapOf<String, MutableMap<String, Int>>()
-        if (this == null) return result
-        keys().forEach { studentId ->
-            val gradeObject = getJSONObject(studentId)
-            result[studentId] = mutableMapOf<String, Int>().apply {
-                gradeObject.keys().forEach { criterionId -> put(criterionId, gradeObject.getInt(criterionId)) }
-            }
-        }
-        return result
-    }
-
-    private fun JSONObject?.toStringMap(): MutableMap<String, String> {
-        val result = mutableMapOf<String, String>()
-        if (this == null) return result
-        keys().forEach { key -> result[key] = optString(key) }
-        return result
-    }
-
-    private fun JSONObject?.toIntStringMap(): Map<Int, String> {
-        val result = mutableMapOf<Int, String>()
-        if (this == null) return result
-        keys().forEach { key ->
-            key.toIntOrNull()?.let { result[it] = optString(key) }
-        }
-        return result
-    }
-}
-
-object ActiveProjectPrefs {
-    private const val PREFS = "tp-project"
-    private const val KEY_ACTIVE_PROJECT_ID = "active-project-id"
-
-    fun save(activity: Activity, projectId: String) {
-        activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_ACTIVE_PROJECT_ID, projectId)
-            .apply()
-    }
-
-    fun load(activity: Activity): String? {
-        return activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-            .getString(KEY_ACTIVE_PROJECT_ID, null)
-    }
-}
-
-data class PendingExport(
-    val projectId: String,
-    val ownerId: String,
-    val label: String,
-)
-
-object PendingExportPrefs {
-    private const val PREFS = "tp-project"
-    private const val KEY_PROJECT_ID = "export-project-id"
-    private const val KEY_OWNER_ID = "export-owner-id"
-    private const val KEY_LABEL = "export-label"
-
-    fun save(activity: Activity, projectId: String, ownerId: String, label: String) {
-        activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PROJECT_ID, projectId)
-            .putString(KEY_OWNER_ID, ownerId)
-            .putString(KEY_LABEL, label)
-            .apply()
-    }
-
-    fun load(activity: Activity): PendingExport? {
-        val prefs = activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE)
-        val projectId = prefs.getString(KEY_PROJECT_ID, null) ?: return null
-        val ownerId = prefs.getString(KEY_OWNER_ID, null) ?: return null
-        val label = prefs.getString(KEY_LABEL, null) ?: return null
-        return PendingExport(projectId, ownerId, label)
-    }
-}
-
-private inline fun <T> JSONArray?.toList(build: JSONObject.() -> T): List<T> {
-    if (this == null) return emptyList()
-    return (0 until length()).map { getJSONObject(it).build() }
-}
-
-private inline fun <T> InputStream?.useRequired(block: (InputStream) -> T): T {
-    val stream = this ?: throw IllegalArgumentException("fichier illisible")
-    return stream.use(block)
-}
-
-private inline fun <T> OutputStream?.useRequired(block: (OutputStream) -> T): T {
-    val stream = this ?: throw IllegalArgumentException("fichier illisible")
-    return stream.use(block)
-}
