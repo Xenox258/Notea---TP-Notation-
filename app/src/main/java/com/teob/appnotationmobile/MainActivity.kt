@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private var pendingStudentListScrollY: Int? = null
     private var studentFilter = StudentFilter.ALL
     private var isDarkMode = false
+    private var gradeTextScale = 1.0f
     private val ui: UiPalette
         get() = if (isDarkMode) UiTheme.dark else UiTheme.light
     private val gradeFormat = DecimalFormat("0.0")
@@ -176,7 +177,7 @@ class MainActivity : Activity() {
                         pickFile(REQUEST_GRID, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     })
                     addView(iconActionButton(
-                        iconRes = R.drawable.ic_file_export,
+                        iconRes = R.drawable.ic_grid_export,
                         description = "Exporter grille remplie",
                         enabled = project.criteria.isNotEmpty(),
                     ) {
@@ -435,9 +436,6 @@ class MainActivity : Activity() {
                         saveCurrentProject()
                         showHome()
                     })
-                    addView(infoButton {
-                        showCompetencyDescriptions()
-                    })
                     },
                     trailing = {
                         addView(themeToggleButton { showStudentList() })
@@ -527,15 +525,28 @@ class MainActivity : Activity() {
                         saveCurrentProject()
                         showStudentList()
                     })
+                    if (hasDescriptors()) {
+                        addView(infoButton {
+                            showCompetencyDescriptions()
+                        })
+                    }
                     },
                     trailing = {
+                        addView(fontScaleButton("-") {
+                            gradeTextScale = (gradeTextScale - 0.1f).coerceIn(0.8f, 1.4f)
+                            showStudentGrade(student)
+                        })
+                        addView(fontScaleButton("+") {
+                            gradeTextScale = (gradeTextScale + 0.1f).coerceIn(0.8f, 1.4f)
+                            showStudentGrade(student)
+                        })
                         addView(themeToggleButton { showStudentGrade(student) })
                     },
                 ))
 
                 val scoreText = TextView(this@MainActivity).apply {
                     text = "Note: ${scoreLabel(student.id)}"
-                    textSize = 22f
+                    textSize = scaledGradeTextSize(22f)
                     setTextColor(scoreColor(student.id))
                     setTypeface(null, android.graphics.Typeface.BOLD)
                     gravity = Gravity.CENTER
@@ -567,7 +578,7 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(14), dp(16), dp(16))
             addView(TextView(this@MainActivity).apply {
                 text = "${criterion.label}\nPondération: ${weightLabel(criterion.weight)}"
-                textSize = 16f
+                textSize = scaledGradeTextSize(16f)
                 setTextColor(ui.text)
                 setPadding(0, dp(3), 0, dp(8))
             })
@@ -683,6 +694,14 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun hasDescriptors(): Boolean {
+        return project.criteria.any { it.descriptors.isNotEmpty() }
+    }
+
+    private fun scaledGradeTextSize(baseSize: Float): Float {
+        return baseSize * gradeTextScale
+    }
+
     private fun recapView(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -715,13 +734,21 @@ class MainActivity : Activity() {
     }
 
     private fun showCompetencyDescriptions() {
-        if (project.criteria.none { it.descriptors.isNotEmpty() }) {
+        if (!hasDescriptors()) {
             toast("Aucun descripteur trouve dans la grille.")
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Descripteurs des competences")
+        val dialog = AlertDialog.Builder(this)
+            .setCustomTitle(TextView(this).apply {
+                text = "Descripteurs des competences"
+                textSize = 20f
+                setTextColor(ui.text)
+                setTypeface(null, android.graphics.Typeface.BOLD)
+                setPadding(dp(22), dp(18), dp(22), dp(8))
+                background = cardSurface()
+            })
             .setView(ScrollView(this).apply {
+                background = cardSurface()
                 addView(LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     val padding = dp(18)
@@ -742,6 +769,8 @@ class MainActivity : Activity() {
             })
             .setPositiveButton("Fermer", null)
             .show()
+        dialog.window?.setBackgroundDrawable(cardSurface())
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(ui.primary)
     }
 
     private fun descriptorBlock(criterion: Criterion): View {
@@ -1335,10 +1364,16 @@ class MainActivity : Activity() {
 
     private fun skillHeader(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 19f
+        textSize = scaledGradeTextSize(19f)
         setTextColor(ui.primary)
         setTypeface(null, android.graphics.Typeface.BOLD)
-        setPadding(dp(2), dp(18), dp(2), dp(8))
+        background = sectionHeaderSurface()
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+    }.also {
+        it.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, dp(14), 0, dp(10)) }
     }
 
     private fun actionButton(text: String, onClick: () -> Unit) = Button(this).apply {
@@ -1453,6 +1488,24 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun fontScaleButton(text: String, onClick: () -> Unit) = Button(this).apply {
+        this.text = text
+        textSize = 18f
+        setAllCaps(false)
+        setTextColor(ui.primary)
+        background = quietSurface()
+        stateListAnimator = null
+        minWidth = 0
+        minHeight = 0
+        setPadding(0, 0, 0, dp(2))
+        contentDescription = if (text == "+") "Agrandir la police" else "Diminuer la police"
+        setOnClickListener { onClick() }
+    }.also {
+        it.layoutParams = LinearLayout.LayoutParams(dp(40), dp(48)).apply {
+            setMargins(0, 0, dp(6), 0)
+        }
+    }
+
     private fun scoreButton(text: String, selected: Boolean, onClick: () -> Unit) = Button(this).apply {
         this.text = text
         textSize = 14f
@@ -1511,6 +1564,14 @@ class MainActivity : Activity() {
             setColor(ui.surfaceAlt)
             cornerRadius = dp(14).toFloat()
             setStroke(dp(1), ui.glassStroke)
+        }
+    }
+
+    private fun sectionHeaderSurface(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(if (isDarkMode) ui.surfaceAlt else Color.rgb(224, 242, 236))
+            cornerRadius = dp(14).toFloat()
+            setStroke(dp(2), if (isDarkMode) ui.primary else Color.rgb(116, 184, 164))
         }
     }
 
@@ -1883,7 +1944,7 @@ object XlsxGridExporter {
     ): String {
         var xml = sheet
         xml = upsertCell(xml, "B28", candidateLabel, text = true)
-        xml = upsertCell(xml, "B27", exportDateLabel(), text = true)
+        xml = upsertCell(xml, "D26", exportDateLabel(), text = true)
         xml = upsertCell(xml, "D28", project.name, text = true)
         project.criteria.forEach { criterion ->
             val row = criterion.rowNumber() ?: return@forEach
